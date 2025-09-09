@@ -1,0 +1,183 @@
+name: Deploy Terraform to Azure
+
+on:
+  workflow_dispatch:
+    inputs:
+      destroy:
+        description: 'Destruir infraestrutura?'
+        required: true
+        default: 'false'
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    if: ${{ github.event.inputs.destroy == 'false' }}
+    name: 🔎 Validar Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v3
+
+      - name: Login no Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Instalar Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Validar Sintaxe e Plano
+        working-directory: infra
+        run: |
+          export ARM_SUBSCRIPTION_ID=${{ secrets.ARM_SUBSCRIPTION_ID }}
+          terraform init
+          terraform fmt -check
+          terraform validate
+          terraform plan -out=tfplan
+
+  deploy:
+    if: ${{ github.event.inputs.destroy == 'false' }}
+    name: 🚀 Deploy e Configuração
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      vmName: ${{ steps.output_vm.outputs.vm_name }}
+      adminUsername: ${{ steps.output_vm.outputs.admin_username }}
+      publicIP: ${{ steps.output_vm.outputs.public_ip }}
+      nsgName: ${{ steps.output_vm.outputs.nsg_name }}
+      resourceGroup: ${{ steps.output_vm.outputs.resource_group }}
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v3
+
+      - name: Login no Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Instalar Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Aplicar Terraform
+        working-directory: infra
+        run: |
+          export ARM_SUBSCRIPTION_ID=${{ secrets.ARM_SUBSCRIPTION_ID }}
+          terraform init
+          terraform apply -auto-approve
+
+      - name: Capturar Outputs
+        id: output_vm
+        working-directory: infra
+        run: |
+          echo "vm_name=vm-automation" >> $GITHUB_OUTPUT
+          echo "admin_username=azureuser" >> $GITHUB_OUTPUT
+          echo "public_ip=$(terraform output -raw public_ip_address)" >> $GITHUB_OUTPUT
+          echo "nsg_name=$(terraform output -raw nsg_name)" >> $GITHUB_OUTPUT
+          echo "resource_group=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+
+      - name: Definir Variáveis de Ambiente
+        run: |
+          echo "VM_NAME=vm-automation" >> $GITHUB_ENV
+          echo "ADMIN_USERNAME=azureuser" >> $GITHUB_ENV
+          echo "PUBLIC_IP=${{ steps.output_vm.outputs.public_ip }}" >> $GITHUB_ENV
+          echo "SSH_COMMAND=ssh azureuser@${{ steps.output_vm.outputs.public_ip }}" >> $GITHUB_ENV
+
+      - name: Instalar Ansible e sshpass
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible sshpass
+
+      - name: Criar Inventário Ansible
+        run: |
+          echo "[vm]" > inventory
+          echo "${{ env.PUBLIC_IP }} ansible_user=${{ env.ADMIN_USERNAME }} ansible_password=${{ secrets.ADMIN_PASSWORD }} ansible_ssh_common_args='-o StrictHostKeyChecking=no'" >> inventory
+
+      - name: Executar Playbook Ansible
+        run: |
+          ansible-playbook -i inventory ansible/playbook.yml --extra-vars "ansible_sudo_pass=${{ secrets.ADMIN_PASSWORD }}"
+
+  post-tests:
+    if: ${{ github.event.inputs.destroy == 'false' }}
+    name: ✅ Pós-Testes de Infra
+    needs: deploy
+    runs-on: ubuntu-latest
+    env:
+      PUBLIC_IP: ${{ needs.deploy.outputs.publicIP }}
+      VM_NAME: ${{ needs.deploy.outputs.vmName }}
+      NSG_NAME: ${{ needs.deploy.outputs.nsgName }}
+      RESOURCE_GROUP: ${{ needs.deploy.outputs.resourceGroup }}
+    steps:
+      - name: Login no Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Testar Swagger na Porta 8081
+        run: |
+          echo "Aguardando aplicação subir com Swagger..."
+          sleep 30
+          response=$(curl -s -o /dev/null -w "%{http_code}" http://$PUBLIC_IP:8081/swagger-ui/index.html)
+          if [ "$response" != "200" ]; then
+            echo "❌ Swagger não respondeu como esperado. Status HTTP: $response"
+            exit 1
+          else
+            echo "✅ Swagger disponível em /swagger-ui/index.html na porta 8081!"
+          fi
+
+      - name: Verificar status da VM
+        run: |
+          status=$(az vm get-instance-view \
+            --name "$VM_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "instanceView.statuses[?code=='PowerState/running'].displayStatus" \
+            --output tsv)
+
+          echo "Status da VM: $status"
+
+          if [ "$status" != "VM running" ]; then
+              echo "❌ A VM não está em execução!"
+              exit 1
+          else
+              echo "✅ VM está rodando com sucesso!"
+          fi
+
+      - name: Verificar regra da NSG para porta 8081
+        run: |
+          result=$(az network nsg rule list \
+            --nsg-name "$NSG_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "[?destinationPortRange=='8081' && access=='Allow']")
+
+          if [ "$result" = "[]" ]; then
+            echo "❌ Porta 8081 não está liberada na NSG!"
+            exit 1
+          else
+            echo "✅ Porta 8081 está liberada corretamente na NSG!"
+          fi
+
+  destroy:
+    if: ${{ github.event.inputs.destroy == 'true' }}
+    name: 🧨 Destruir Infraestrutura
+    runs-on: ubuntu-latest
+    env:
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v3
+
+      - name: Login no Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Instalar Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Executar Terraform Destroy
+        working-directory: infra
+        run: |
+          terraform init
+          terraform destroy -auto-approve
