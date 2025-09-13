@@ -17,6 +17,10 @@ jobs:
     if: ${{ github.event.inputs.destroy == 'false' }}
     name: 🔎 Validar Terraform
     runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      step-outcome: ${{ steps.terraform-validate.outcome }}
+      error-type: ${{ steps.terraform-validate.outputs.error }}
     steps:
       - name: Checkout do código
         uses: actions/checkout@v3
@@ -30,25 +34,52 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Validar Sintaxe e Plano
+        id: terraform-validate
+        continue-on-error: true
         working-directory: infra
         run: |
           export ARM_SUBSCRIPTION_ID=${{ secrets.ARM_SUBSCRIPTION_ID }}
-          terraform init
-          terraform fmt -check
-          terraform validate
-          terraform plan -out=tfplan
+          
+          # Terraform init
+          if ! terraform init; then
+            echo "error=terraform_init_error" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Terraform format check
+          if ! terraform fmt -check; then
+            echo "error=terraform_format_error" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Terraform validate
+          if ! terraform validate; then
+            echo "error=terraform_validation_error" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Terraform plan
+          if ! terraform plan -out=tfplan; then
+            echo "error=terraform_plan_error" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "error=none" >> $GITHUB_OUTPUT
 
   deploy:
     if: ${{ github.event.inputs.destroy == 'false' }}
     name: 🚀 Deploy e Configuração
     needs: validate
     runs-on: ubuntu-latest
+    continue-on-error: true
     outputs:
       vmName: ${{ steps.output_vm.outputs.vm_name }}
       adminUsername: ${{ steps.output_vm.outputs.admin_username }}
       publicIP: ${{ steps.output_vm.outputs.public_ip }}
       nsgName: ${{ steps.output_vm.outputs.nsg_name }}
       resourceGroup: ${{ steps.output_vm.outputs.resource_group }}
+      step-outcome: ${{ steps.terraform-apply.outcome }}
+      error-type: ${{ steps.terraform-apply.outputs.error }}
     steps:
       - name: Checkout do código
         uses: actions/checkout@v3
@@ -62,11 +93,25 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Aplicar Terraform
+        id: terraform-apply
+        continue-on-error: true
         working-directory: infra
         run: |
           export ARM_SUBSCRIPTION_ID=${{ secrets.ARM_SUBSCRIPTION_ID }}
-          terraform init
-          terraform apply -auto-approve
+          
+          # Terraform init
+          if ! terraform init; then
+            echo "error=terraform_init_deploy_error" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          # Terraform apply
+          if ! terraform apply -auto-approve; then
+            echo "error=terraform_apply_error" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "error=none" >> $GITHUB_OUTPUT
 
       - name: Capturar Outputs
         id: output_vm
@@ -104,6 +149,10 @@ jobs:
     name: ✅ Pós-Testes de Infra
     needs: deploy
     runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      step-outcome: ${{ steps.run-tests.outcome }}
+      error-type: ${{ steps.run-tests.outputs.error }}
     env:
       PUBLIC_IP: ${{ needs.deploy.outputs.publicIP }}
       VM_NAME: ${{ needs.deploy.outputs.vmName }}
@@ -115,20 +164,23 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Testar Swagger na Porta 8081
+      - name: Executar Testes de Infraestrutura
+        id: run-tests
+        continue-on-error: true
         run: |
+          # Teste 1: Swagger na Porta 8081
           echo "Aguardando aplicação subir com Swagger..."
           sleep 30
           response=$(curl -s -o /dev/null -w "%{http_code}" http://$PUBLIC_IP:8081/swagger-ui/index.html)
           if [ "$response" != "200" ]; then
             echo "❌ Swagger não respondeu como esperado. Status HTTP: $response"
+            echo "error=swagger_test_error" >> $GITHUB_OUTPUT
             exit 1
           else
             echo "✅ Swagger disponível em /swagger-ui/index.html na porta 8081!"
           fi
 
-      - name: Verificar status da VM
-        run: |
+          # Teste 2: Status da VM
           status=$(az vm get-instance-view \
             --name "$VM_NAME" \
             --resource-group "$RESOURCE_GROUP" \
@@ -136,16 +188,15 @@ jobs:
             --output tsv)
 
           echo "Status da VM: $status"
-
           if [ "$status" != "VM running" ]; then
               echo "❌ A VM não está em execução!"
+              echo "error=vm_status_error" >> $GITHUB_OUTPUT
               exit 1
           else
               echo "✅ VM está rodando com sucesso!"
           fi
 
-      - name: Verificar regra da NSG para porta 8081
-        run: |
+          # Teste 3: Regra da NSG para porta 8081
           result=$(az network nsg rule list \
             --nsg-name "$NSG_NAME" \
             --resource-group "$RESOURCE_GROUP" \
@@ -153,10 +204,13 @@ jobs:
 
           if [ "$result" = "[]" ]; then
             echo "❌ Porta 8081 não está liberada na NSG!"
+            echo "error=nsg_rule_error" >> $GITHUB_OUTPUT
             exit 1
           else
             echo "✅ Porta 8081 está liberada corretamente na NSG!"
           fi
+          
+          echo "error=none" >> $GITHUB_OUTPUT
 
   troubleshooting:
     runs-on: ubuntu-latest
@@ -181,8 +235,7 @@ jobs:
       id: troubleshoot
       timeout-minutes: 5
       env:
-        ERROR_TYPE: ${{ (needs.validate.result == 'failure' && 'terraform_validation') || (needs.deploy.result == 'failure' && 'deployment_error') || (needs.post-tests.result == 'failure' && 'post_test_error') || 'unknown_error' }}
-        ERROR_LOGS: ${{ toJSON(needs) }}
+        ERROR_TYPE: ${{ (needs.validate.outputs.error-type != 'none' && needs.validate.outputs.error-type) || (needs.deploy.outputs.error-type != 'none' && needs.deploy.outputs.error-type) || (needs.post-tests.outputs.error-type != 'none' && needs.post-tests.outputs.error-type) || 'unknown_error' }}
         WORKFLOW_NAME: ${{ github.workflow }}
         REPOSITORY: ${{ github.repository }}
         BRANCH: ${{ github.ref_name }}

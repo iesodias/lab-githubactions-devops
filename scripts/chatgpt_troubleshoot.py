@@ -18,7 +18,6 @@ def main():
     # Capturar variáveis de ambiente
     api_key = os.environ.get('OPENAI_API_KEY')
     error_type = os.environ.get('ERROR_TYPE', 'unknown_error')
-    error_logs = os.environ.get('ERROR_LOGS', '')
     workflow_name = os.environ.get('WORKFLOW_NAME', 'Unknown Workflow')
     repository = os.environ.get('REPOSITORY', 'Unknown Repository')
     branch = os.environ.get('BRANCH', 'Unknown Branch')
@@ -30,7 +29,6 @@ def main():
     print(f"Repository: {repository}")
     print(f"Branch: {branch}")
     print(f"Error Type: {error_type}")
-    print(f"Error Logs Available: {'Yes' if error_logs else 'No'}")
     print("=" * 60)
     
     if not api_key:
@@ -53,42 +51,26 @@ def main():
     - Tipo de Erro: {error_type}
     - Timestamp: {datetime.now().isoformat()}
     
-    LOGS DE ERRO COMPLETOS:
-    {error_logs}
-    
     DETALHES DO PROBLEMA:
-    A pipeline falhou durante a execução. Baseado nos LOGS DE ERRO ESPECÍFICOS acima, forneça uma análise detalhada:
+    A pipeline falhou durante a execução. Baseado no tipo de erro identificado, forneça:
     
     ## 🔍 DIAGNÓSTICO
-    Analise EXATAMENTE as mensagens de erro dos logs acima e explique:
-    - Qual é a causa raiz do problema
-    - Em que linha/comando específico o erro ocorreu
-    - Por que este erro aconteceu
+    Explique o que provavelmente causou o erro
     
     ## 🛠️ SOLUÇÕES IMEDIATAS
-    Baseado nos logs de erro específicos, forneça 3-5 soluções práticas:
-    - Comandos exatos para corrigir o problema
-    - Arquivos que precisam ser modificados
-    - Variáveis de ambiente que podem estar faltando
+    Liste 3-5 soluções práticas e específicas
     
-    ## 🚀 IMPLEMENTAÇÃO STEP-BY-STEP
-    Forneça comandos específicos e sequenciais para resolver:
-    ```bash
-    # Exemplo de comandos específicos baseados no erro
-    ```
+    ## 🚀 IMPLEMENTAÇÃO
+    Forneça comandos específicos para resolver o problema
     
-    ## 🛡️ PREVENÇÃO FUTURA
-    Como evitar que este erro específico aconteça novamente:
-    - Verificações pré-commit
-    - Testes locais
-    - Configurações de ambiente
+    ## 🛡️ PREVENÇÃO
+    Sugira como evitar este erro no futuro
     
-    ## 📋 CHECKLIST DE VERIFICAÇÃO
-    - [ ] Verificar se [item específico do erro] está correto
-    - [ ] Testar [comando específico] localmente
-    - [ ] Confirmar [configuração específica]
+    ## 📋 CHECKLIST
+    - [ ] Item de verificação 1
+    - [ ] Item de verificação 2
     
-    IMPORTANTE: Baseie sua resposta EXCLUSIVAMENTE nos logs de erro fornecidos. Seja específico e prático.
+    Responda de forma técnica mas clara, focando em ações práticas.
     """
     
     # Fazer chamada para OpenAI API
@@ -140,14 +122,6 @@ def main():
             f.write(f"**Commit:** {commit}\n")
             f.write(f"**Error Type:** {error_type}\n")
             f.write(f"**Timestamp:** {datetime.now().isoformat()}\n\n")
-            
-            # Incluir logs de erro no relatório
-            if error_logs:
-                f.write("## Error Logs\n\n")
-                f.write("```\n")
-                f.write(error_logs)
-                f.write("```\n\n")
-            
             f.write("## ChatGPT Analysis\n\n")
             f.write(troubleshooting_advice)
         
