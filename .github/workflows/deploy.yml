@@ -38,6 +38,39 @@ jobs:
           terraform validate
           terraform plan -out=tfplan
 
+      - name: Troubleshoot Terraform Validation
+        if: failure()
+        run: |
+          python -m pip install --upgrade pip
+          pip install openai requests
+        env:
+          ERROR_TYPE: "terraform_validation_error"
+          WORKFLOW_NAME: ${{ github.workflow }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Run ChatGPT Analysis
+        if: failure()
+        run: |
+          python3 scripts/chatgpt_troubleshoot.py
+        env:
+          ERROR_TYPE: "terraform_validation_error"
+          WORKFLOW_NAME: ${{ github.workflow }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Upload Troubleshooting Report
+        if: failure() && hashFiles('troubleshooting_report.md') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: troubleshooting-report-validate-${{ github.run_number }}
+          path: troubleshooting_report.md
+          retention-days: 30
+
   deploy:
     if: ${{ github.event.inputs.destroy == 'false' }}
     name: 🚀 Deploy e Configuração
@@ -158,46 +191,6 @@ jobs:
             echo "✅ Porta 8081 está liberada corretamente na NSG!"
           fi
 
-  troubleshooting:
-    runs-on: ubuntu-latest
-    needs: [validate, deploy, post-tests]
-    if: always() && (failure() || cancelled())
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install openai requests
-        
-    - name: ChatGPT Troubleshooting
-      id: troubleshoot
-      timeout-minutes: 5
-      env:
-        ERROR_TYPE: "pipeline_failure"
-        WORKFLOW_NAME: ${{ github.workflow }}
-        REPOSITORY: ${{ github.repository }}
-        BRANCH: ${{ github.ref_name }}
-        COMMIT: ${{ github.sha }}
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      run: |
-        python3 scripts/chatgpt_troubleshoot.py
-        
-    - name: Upload Troubleshooting Report
-      if: always() && hashFiles('troubleshooting_report.md') != ''
-      uses: actions/upload-artifact@v4
-      with:
-        name: troubleshooting-report-${{ github.run_number }}
-        path: troubleshooting_report.md
-        retention-days: 30
-        
 
   destroy:
     if: ${{ github.event.inputs.destroy == 'true' }}
