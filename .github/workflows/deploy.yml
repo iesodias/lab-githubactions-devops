@@ -161,7 +161,7 @@ jobs:
   troubleshooting:
     runs-on: ubuntu-latest
     needs: [validate, deploy, post-tests]
-    if: always() && (needs.validate.result == 'failure' || needs.deploy.result == 'failure' || needs.post-tests.result == 'failure')
+    if: always() && (failure() || cancelled())
     
     steps:
     - name: Checkout code
