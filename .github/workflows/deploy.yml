@@ -39,28 +39,49 @@ jobs:
         run: |
           export ARM_SUBSCRIPTION_ID=${{ secrets.ARM_SUBSCRIPTION_ID }}
           FAILED=false
+          set -o pipefail
 
           # terraform init
-          if ! terraform init 2>&1; then
+          if ! terraform init -no-color 2>&1 | tee tf_init.log; then
             echo "error=terraform_backend_error" >> $GITHUB_OUTPUT
+            {
+              echo 'error_message<<EOF'
+              tail -n 200 tf_init.log || true
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
             FAILED=true
           fi
 
           # terraform fmt
-          if [ "$FAILED" = false ] && ! terraform fmt -check 2>&1; then
+          if [ "$FAILED" = false ] && ! terraform fmt -check -no-color 2>&1 | tee tf_fmt.log; then
             echo "error=terraform_format_error" >> $GITHUB_OUTPUT
+            {
+              echo 'error_message<<EOF'
+              tail -n 200 tf_fmt.log || true
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
             FAILED=true
           fi
 
           # terraform validate
-          if [ "$FAILED" = false ] && ! terraform validate 2>&1; then
+          if [ "$FAILED" = false ] && ! terraform validate -no-color 2>&1 | tee tf_validate.log; then
             echo "error=terraform_validation_error" >> $GITHUB_OUTPUT
+            {
+              echo 'error_message<<EOF'
+              tail -n 200 tf_validate.log || true
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
             FAILED=true
           fi
 
           # terraform plan
-          if [ "$FAILED" = false ] && ! terraform plan -out=tfplan 2>&1; then
+          if [ "$FAILED" = false ] && ! terraform plan -no-color -out=tfplan 2>&1 | tee tf_plan.log; then
             echo "error=terraform_plan_error" >> $GITHUB_OUTPUT
+            {
+              echo 'error_message<<EOF'
+              tail -n 200 tf_plan.log || true
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
             FAILED=true
           fi
 
@@ -90,6 +111,7 @@ jobs:
         timeout-minutes: 5
         env:
           ERROR_TYPE: ${{ steps.validate-terraform.outputs.error }}
+          ERROR_MESSAGE: ${{ steps.validate-terraform.outputs.error_message }}
           WORKFLOW_NAME: ${{ github.workflow }}
           REPOSITORY: ${{ github.repository }}
           BRANCH: ${{ github.ref_name }}
@@ -139,14 +161,25 @@ jobs:
         run: |
           export ARM_SUBSCRIPTION_ID=${{ secrets.ARM_SUBSCRIPTION_ID }}
           FAILED=false
+          set -o pipefail
 
-          if ! terraform init 2>&1; then
+          if ! terraform init -no-color 2>&1 | tee tf_apply_init.log; then
             echo "error=apply_backend_error" >> $GITHUB_OUTPUT
+            {
+              echo 'error_message<<EOF'
+              tail -n 200 tf_apply_init.log || true
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
             FAILED=true
           fi
 
-          if [ "$FAILED" = false ] && ! terraform apply -auto-approve 2>&1; then
+          if [ "$FAILED" = false ] && ! terraform apply -no-color -auto-approve 2>&1 | tee tf_apply.log; then
             echo "error=terraform_apply_error" >> $GITHUB_OUTPUT
+            {
+              echo 'error_message<<EOF'
+              tail -n 200 tf_apply.log || true
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
             FAILED=true
           fi
 
@@ -176,6 +209,7 @@ jobs:
         timeout-minutes: 5
         env:
           ERROR_TYPE: ${{ steps.apply-terraform.outputs.error }}
+          ERROR_MESSAGE: ${{ steps.apply-terraform.outputs.error_message }}
           WORKFLOW_NAME: ${{ github.workflow }}
           REPOSITORY: ${{ github.repository }}
           BRANCH: ${{ github.ref_name }}
@@ -232,8 +266,14 @@ jobs:
         if: ${{ steps.apply-terraform.outputs.failed != 'true' }}
         run: |
           FAILED=false
-          if ! ansible-playbook -i inventory ansible/playbook.yml --extra-vars "ansible_sudo_pass=${{ secrets.ADMIN_PASSWORD }}" 2>&1; then
+          set -o pipefail
+          if ! ansible-playbook -i inventory ansible/playbook.yml --extra-vars "ansible_sudo_pass=${{ secrets.ADMIN_PASSWORD }}" 2>&1 | tee ansible.log; then
             echo "error=ansible_playbook_error" >> $GITHUB_OUTPUT
+            {
+              echo 'error_message<<EOF'
+              tail -n 200 ansible.log || true
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
             FAILED=true
           fi
           if [ "$FAILED" = false ]; then
@@ -262,6 +302,7 @@ jobs:
         timeout-minutes: 5
         env:
           ERROR_TYPE: ${{ steps.ansible-playbook.outputs.error }}
+          ERROR_MESSAGE: ${{ steps.ansible-playbook.outputs.error_message }}
           WORKFLOW_NAME: ${{ github.workflow }}
           REPOSITORY: ${{ github.repository }}
           BRANCH: ${{ github.ref_name }}
