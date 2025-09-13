@@ -18,9 +18,9 @@ jobs:
     name: 🔎 Validar Terraform
     runs-on: ubuntu-latest
     outputs:
-      step-outcome: ${{ steps.validate-terraform.outcome }}
+      step-outcome: ${{ steps.validate-terraform.outputs.failed }}
       error-type: ${{ steps.validate-terraform.outputs.error }}
-    continue-on-error: true
+    # Não usar continue-on-error no job; vamos controlar no step e falhar no final
     steps:
       - name: Checkout do código
         uses: actions/checkout@v3
@@ -38,45 +38,54 @@ jobs:
         working-directory: infra
         run: |
           export ARM_SUBSCRIPTION_ID=${{ secrets.ARM_SUBSCRIPTION_ID }}
-          
-          # Capturar output do terraform init
+          FAILED=false
+
+          # terraform init
           if ! terraform init 2>&1; then
             echo "error=terraform_backend_error" >> $GITHUB_OUTPUT
-            exit 1
+            FAILED=true
           fi
-          
-          if ! terraform fmt -check 2>&1; then
+
+          # terraform fmt
+          if [ "$FAILED" = false ] && ! terraform fmt -check 2>&1; then
             echo "error=terraform_format_error" >> $GITHUB_OUTPUT
-            exit 1
+            FAILED=true
           fi
-          
-          if ! terraform validate 2>&1; then
+
+          # terraform validate
+          if [ "$FAILED" = false ] && ! terraform validate 2>&1; then
             echo "error=terraform_validation_error" >> $GITHUB_OUTPUT
-            exit 1
+            FAILED=true
           fi
-          
-          if ! terraform plan -out=tfplan 2>&1; then
+
+          # terraform plan
+          if [ "$FAILED" = false ] && ! terraform plan -out=tfplan 2>&1; then
             echo "error=terraform_plan_error" >> $GITHUB_OUTPUT
-            exit 1
+            FAILED=true
           fi
-          
-          echo "error=none" >> $GITHUB_OUTPUT
+
+          if [ "$FAILED" = false ]; then
+            echo "error=none" >> $GITHUB_OUTPUT
+            echo "failed=false" >> $GITHUB_OUTPUT
+          else
+            echo "failed=true" >> $GITHUB_OUTPUT
+          fi
 
       # ChatGPT troubleshooting no MESMO job para capturar erro específico
       - name: Set up Python (ChatGPT)
-        if: ${{ steps.validate-terraform.outcome == 'failure' }}
+        if: ${{ steps.validate-terraform.outputs.failed == 'true' }}
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies (ChatGPT)
-        if: ${{ steps.validate-terraform.outcome == 'failure' }}
+        if: ${{ steps.validate-terraform.outputs.failed == 'true' }}
         run: |
           python -m pip install --upgrade pip
           pip install openai requests
 
       - name: ChatGPT Troubleshooting
-        if: ${{ steps.validate-terraform.outcome == 'failure' }}
+        if: ${{ steps.validate-terraform.outputs.failed == 'true' }}
         id: troubleshoot
         timeout-minutes: 5
         env:
@@ -90,15 +99,19 @@ jobs:
           python3 scripts/chatgpt_troubleshoot.py
 
       - name: Upload Troubleshooting Report
-        if: ${{ always() && steps.validate-terraform.outcome == 'failure' && hashFiles('troubleshooting_report.md') != '' }}
+        if: ${{ always() && steps.validate-terraform.outputs.failed == 'true' && hashFiles('troubleshooting_report.md') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: troubleshooting-report-${{ github.run_number }}
           path: troubleshooting_report.md
           retention-days: 30
 
+      - name: Falhar job após troubleshooting (se necessário)
+        if: ${{ steps.validate-terraform.outputs.failed == 'true' }}
+        run: exit 1
+
   deploy:
-    if: ${{ github.event.inputs.destroy == 'false' }}
+    if: ${{ github.event.inputs.destroy == 'false' && needs.validate.result == 'success' }}
     name: 🚀 Deploy e Configuração
     needs: validate
     runs-on: ubuntu-latest
@@ -159,7 +172,7 @@ jobs:
           ansible-playbook -i inventory ansible/playbook.yml --extra-vars "ansible_sudo_pass=${{ secrets.ADMIN_PASSWORD }}"
 
   post-tests:
-    if: ${{ github.event.inputs.destroy == 'false' }}
+    if: ${{ github.event.inputs.destroy == 'false' && needs.deploy.result == 'success' }}
     name: ✅ Pós-Testes de Infra
     needs: deploy
     runs-on: ubuntu-latest
