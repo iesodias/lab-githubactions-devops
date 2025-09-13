@@ -134,15 +134,72 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Aplicar Terraform
+        id: apply-terraform
         working-directory: infra
         run: |
           export ARM_SUBSCRIPTION_ID=${{ secrets.ARM_SUBSCRIPTION_ID }}
-          terraform init
-          terraform apply -auto-approve
+          FAILED=false
+
+          if ! terraform init 2>&1; then
+            echo "error=apply_backend_error" >> $GITHUB_OUTPUT
+            FAILED=true
+          fi
+
+          if [ "$FAILED" = false ] && ! terraform apply -auto-approve 2>&1; then
+            echo "error=terraform_apply_error" >> $GITHUB_OUTPUT
+            FAILED=true
+          fi
+
+          if [ "$FAILED" = false ]; then
+            echo "error=none" >> $GITHUB_OUTPUT
+            echo "failed=false" >> $GITHUB_OUTPUT
+          else
+            echo "failed=true" >> $GITHUB_OUTPUT
+          fi
+
+      # ChatGPT troubleshooting para falha no apply
+      - name: Set up Python (ChatGPT - apply)
+        if: ${{ steps.apply-terraform.outputs.failed == 'true' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies (ChatGPT - apply)
+        if: ${{ steps.apply-terraform.outputs.failed == 'true' }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install openai requests
+
+      - name: ChatGPT Troubleshooting (apply)
+        if: ${{ steps.apply-terraform.outputs.failed == 'true' }}
+        id: troubleshoot-apply
+        timeout-minutes: 5
+        env:
+          ERROR_TYPE: ${{ steps.apply-terraform.outputs.error }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python3 scripts/chatgpt_troubleshoot.py
+
+      - name: Upload Troubleshooting Report (apply)
+        if: ${{ always() && steps.apply-terraform.outputs.failed == 'true' && hashFiles('troubleshooting_report.md') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: troubleshooting-report-apply-${{ github.run_number }}
+          path: troubleshooting_report.md
+          retention-days: 30
+
+      - name: Falhar job após troubleshooting (apply)
+        if: ${{ steps.apply-terraform.outputs.failed == 'true' }}
+        run: exit 1
 
       - name: Capturar Outputs
         id: output_vm
         working-directory: infra
+        if: ${{ steps.apply-terraform.outputs.failed != 'true' }}
         run: |
           echo "vm_name=vm-automation" >> $GITHUB_OUTPUT
           echo "admin_username=azureuser" >> $GITHUB_OUTPUT
@@ -151,6 +208,7 @@ jobs:
           echo "resource_group=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
 
       - name: Definir Variáveis de Ambiente
+        if: ${{ steps.apply-terraform.outputs.failed != 'true' }}
         run: |
           echo "VM_NAME=vm-automation" >> $GITHUB_ENV
           echo "ADMIN_USERNAME=azureuser" >> $GITHUB_ENV
@@ -158,18 +216,71 @@ jobs:
           echo "SSH_COMMAND=ssh azureuser@${{ steps.output_vm.outputs.public_ip }}" >> $GITHUB_ENV
 
       - name: Instalar Ansible e sshpass
+        if: ${{ steps.apply-terraform.outputs.failed != 'true' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y ansible sshpass
 
       - name: Criar Inventário Ansible
+        if: ${{ steps.apply-terraform.outputs.failed != 'true' }}
         run: |
           echo "[vm]" > inventory
           echo "$PUBLIC_IP ansible_user=$ADMIN_USERNAME ansible_password=${{ secrets.ADMIN_PASSWORD }} ansible_ssh_common_args='-o StrictHostKeyChecking=no'" >> inventory
 
       - name: Executar Playbook Ansible
+        id: ansible-playbook
+        if: ${{ steps.apply-terraform.outputs.failed != 'true' }}
         run: |
-          ansible-playbook -i inventory ansible/playbook.yml --extra-vars "ansible_sudo_pass=${{ secrets.ADMIN_PASSWORD }}"
+          FAILED=false
+          if ! ansible-playbook -i inventory ansible/playbook.yml --extra-vars "ansible_sudo_pass=${{ secrets.ADMIN_PASSWORD }}" 2>&1; then
+            echo "error=ansible_playbook_error" >> $GITHUB_OUTPUT
+            FAILED=true
+          fi
+          if [ "$FAILED" = false ]; then
+            echo "error=none" >> $GITHUB_OUTPUT
+            echo "failed=false" >> $GITHUB_OUTPUT
+          else
+            echo "failed=true" >> $GITHUB_OUTPUT
+          fi
+
+      # ChatGPT troubleshooting para falha no Ansible
+      - name: Set up Python (ChatGPT - ansible)
+        if: ${{ steps.ansible-playbook.outputs.failed == 'true' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies (ChatGPT - ansible)
+        if: ${{ steps.ansible-playbook.outputs.failed == 'true' }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install openai requests
+
+      - name: ChatGPT Troubleshooting (ansible)
+        if: ${{ steps.ansible-playbook.outputs.failed == 'true' }}
+        id: troubleshoot-ansible
+        timeout-minutes: 5
+        env:
+          ERROR_TYPE: ${{ steps.ansible-playbook.outputs.error }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python3 scripts/chatgpt_troubleshoot.py
+
+      - name: Upload Troubleshooting Report (ansible)
+        if: ${{ always() && steps.ansible-playbook.outputs.failed == 'true' && hashFiles('troubleshooting_report.md') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: troubleshooting-report-ansible-${{ github.run_number }}
+          path: troubleshooting_report.md
+          retention-days: 30
+
+      - name: Falhar job após troubleshooting (ansible)
+        if: ${{ steps.ansible-playbook.outputs.failed == 'true' }}
+        run: exit 1
 
   post-tests:
     if: ${{ github.event.inputs.destroy == 'false' && needs.deploy.result == 'success' }}
