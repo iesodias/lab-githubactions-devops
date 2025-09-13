@@ -9,7 +9,6 @@ import sys
 import json
 import requests
 from datetime import datetime
-import re
 
 
 def summarize(text: str, max_chars: int = 4000) -> str:
@@ -54,13 +53,6 @@ def main():
         print("3. Configure como secret no GitHub: Settings > Secrets > OPENAI_API_KEY")
         sys.exit(1)
 
-    # Heurística rápida para região inválida do Azure
-    azure_region_hint = ""
-    if re.search(r"was not found in the list of supported Azure Locations", error_message, re.IGNORECASE):
-        azure_region_hint = (
-            "Parece ser uma região inválida do Azure. Corrija a variável 'location' no Terraform para uma região válida (ex.: eastus, eastus2, uksouth)."
-        )
-
     # Construir prompt para ChatGPT
     prompt = f"""
     Você é um especialista em DevOps e troubleshooting de pipelines CI/CD.
@@ -90,9 +82,6 @@ def main():
 
     ## 🛡️ PREVENÇÃO
     Sugira como evitar este erro no futuro.
-
-    {('DICA ADICIONAL: ' + azure_region_hint) if azure_region_hint else ''}
-
     Seja objetivo e específico para ESTE erro.
     """
 
