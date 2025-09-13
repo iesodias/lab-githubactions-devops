@@ -134,7 +134,7 @@ jobs:
 
   deploy:
     if: ${{ github.event.inputs.destroy == 'false' && needs.validate.result == 'success' }}
-    name: 🚀 Deploy e Configuração
+    name: Deploy e Configuração
     needs: validate
     runs-on: ubuntu-latest
     outputs:
@@ -325,7 +325,7 @@ jobs:
 
   post-tests:
     if: ${{ github.event.inputs.destroy == 'false' && needs.deploy.result == 'success' }}
-    name: ✅ Pós-Testes de Infra
+    name: Pós-Testes de Infra
     needs: deploy
     runs-on: ubuntu-latest
     env:
@@ -384,7 +384,7 @@ jobs:
 
   destroy:
     if: ${{ github.event.inputs.destroy == 'true' }}
-    name: 🧨 Destruir Infraestrutura
+    name: Destruir Infraestrutura
     runs-on: ubuntu-latest
     env:
       ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
